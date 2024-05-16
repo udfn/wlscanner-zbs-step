@@ -46,7 +46,7 @@ pub const WlScannerStep = struct {
     }
     pub fn linkWith(self: *Self, lib: *std.Build.Step.Compile) void {
         lib.linkLibrary(self.lib);
-        lib.addIncludePath(.{ .generated = &self.dest_path });
+        lib.addIncludePath(.{ .generated = .{.file = &self.dest_path} });
     }
     pub fn addProtocol(self: *Self, xml: []const u8, system: bool) void {
         const real_xml = blk: {
@@ -65,7 +65,7 @@ pub const WlScannerStep = struct {
             .file = .{ .step = &self.step },
             .system = system,
         };
-        self.lib.addCSourceFile(.{ .file = .{ .generated = &node.data.file }, .flags = &.{} });
+        self.lib.addCSourceFile(.{ .file = .{ .generated = .{.file = &node.data.file} }, .flags = &.{} });
         self.queue.prepend(node);
     }
     pub fn addProtocolFromPath(self: *Self, base: []const u8, xml: []const u8) void {
