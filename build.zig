@@ -46,7 +46,7 @@ pub const WlScannerStep = struct {
     }
     pub fn linkWith(self: *Self, lib: *std.Build.Step.Compile) void {
         lib.linkLibrary(self.lib);
-        lib.addIncludePath(.{ .generated = .{.file = &self.dest_path} });
+        lib.addIncludePath(.{ .generated = .{ .file = &self.dest_path } });
     }
     pub fn addProtocol(self: *Self, xml: []const u8, system: bool) void {
         const real_xml = blk: {
@@ -54,7 +54,7 @@ pub const WlScannerStep = struct {
                 if (self.system_protocol_dir == null) {
                     self.system_protocol_dir = std.mem.trim(u8, self.step.owner.run(&.{ "pkg-config", "--variable=pkgdatadir", "wayland-protocols" }), &std.ascii.whitespace);
                 }
-                break :blk self.step.owner.pathJoin(&.{self.system_protocol_dir.?, xml});
+                break :blk self.step.owner.pathJoin(&.{ self.system_protocol_dir.?, xml });
             } else {
                 break :blk xml;
             }
@@ -65,7 +65,7 @@ pub const WlScannerStep = struct {
             .file = .{ .step = &self.step },
             .system = system,
         };
-        self.lib.addCSourceFile(.{ .file = .{ .generated = .{.file = &node.data.file} }, .flags = &.{} });
+        self.lib.addCSourceFile(.{ .file = .{ .generated = .{ .file = &node.data.file } }, .flags = &.{} });
         self.queue.prepend(node);
     }
     pub fn addProtocolFromPath(self: *Self, base: []const u8, xml: []const u8) void {
@@ -96,7 +96,7 @@ pub const WlScannerStep = struct {
     };
 
     fn runScanner(self: *Self, protocol: []const u8, gentype: WlScanGenType, output: []const u8, dest: std.fs.Dir) !void {
-        var scannerprocess = std.process.Child.init(&.{ "wayland-scanner", gentype.toString(), protocol, output}, self.step.owner.allocator);
+        var scannerprocess = std.process.Child.init(&.{ "wayland-scanner", gentype.toString(), protocol, output }, self.step.owner.allocator);
         scannerprocess.cwd_dir = dest;
         const ret = try scannerprocess.spawnAndWait();
         switch (ret) {
@@ -104,7 +104,8 @@ pub const WlScannerStep = struct {
                 if (val == 0) {
                     return;
                 }
-            }, else => {}
+            },
+            else => {},
         }
         return error.WaylandScannerFailed;
     }
@@ -133,9 +134,9 @@ pub const WlScannerStep = struct {
         }
     }
 
-    pub fn make(step: *std.Build.Step, progress: *std.Progress.Node) !void {
+    pub fn make(step: *std.Build.Step, progress: std.Progress.Node) !void {
         _ = progress;
-        const self:*Self = @fieldParentPtr("step", step);
+        const self: *Self = @fieldParentPtr("step", step);
         if (self.queue.first == null) {
             return;
         }
@@ -147,7 +148,7 @@ pub const WlScannerStep = struct {
             _ = try manifest.addFile(node.data.xml, null);
         }
         self.step.result_cached = try manifest.hit();
-        const dest = try step.owner.cache_root.join(step.owner.allocator, &.{"wl-gen", &manifest.final()});
+        const dest = try step.owner.cache_root.join(step.owner.allocator, &.{ "wl-gen", &manifest.final() });
         self.dest_path.path = dest;
         it = self.queue.first;
         var dest_dir = try std.fs.cwd().makeOpenPath(dest, .{});
@@ -161,8 +162,8 @@ pub const WlScannerStep = struct {
             }
             // Need to fix the generatedfiles for the c sources
             const name = std.fs.path.stem(node.data.xml);
-            const namefile = try std.mem.concat(step.owner.allocator, u8, &.{name, ".c"});
-            node.data.file.path = step.owner.pathJoin(&.{dest, namefile});
+            const namefile = try std.mem.concat(step.owner.allocator, u8, &.{ name, ".c" });
+            node.data.file.path = step.owner.pathJoin(&.{ dest, namefile });
         }
         if (!self.step.result_cached) {
             try manifest.writeManifest();
