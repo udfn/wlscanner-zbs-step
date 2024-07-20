@@ -134,8 +134,8 @@ pub const WlScannerStep = struct {
         }
     }
 
-    pub fn make(step: *std.Build.Step, progress: std.Progress.Node) !void {
-        _ = progress;
+    pub fn make(step: *std.Build.Step, options: std.Build.Step.MakeOptions) !void {
+        _ = options;
         const self: *Self = @fieldParentPtr("step", step);
         if (self.queue.first == null) {
             return;
