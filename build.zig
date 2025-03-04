@@ -25,8 +25,12 @@ pub const WlScannerStep = struct {
         const mod = b.createModule(.{
             .target = options.target,
             .optimize = options.optimize,
+            .link_libc = true,
         });
-        mod.linkSystemLibrary("wayland-client", .{});
+        // Why not just linkSystemLibrary? Because if I do that then I get lld warnings like...
+        // archive member '/lib64/libwayland-client.so' is neither ET_REL nor LLVM bitcode
+        // ... that make the build system think the build failed, but it did not really fail.
+        mod.addIncludePath(.{ .cwd_relative = std.mem.trim(u8, b.run(&.{ "pkg-config", "--variable=includedir", "wayland-client" }), &std.ascii.whitespace) });
         res.* = .{
             .step = std.Build.Step.init(.{
                 .id = .custom,
@@ -35,8 +39,9 @@ pub const WlScannerStep = struct {
                 .makeFn = make,
             }),
             .queue = .{},
-            .lib = b.addObject(.{
-                .name = "wl-protocol-obj",
+            .lib = b.addLibrary(.{
+                .linkage = .static,
+                .name = "wl-protocol-lib",
                 .root_module = mod,
             }),
             .dest_path = .{ .step = &res.step },
@@ -46,7 +51,7 @@ pub const WlScannerStep = struct {
         return res;
     }
     pub fn linkWith(self: *Self, mod: *std.Build.Module) void {
-        mod.addObject(self.lib);
+        mod.linkLibrary(self.lib);
         mod.addIncludePath(.{ .generated = .{ .file = &self.dest_path } });
     }
 
@@ -55,9 +60,7 @@ pub const WlScannerStep = struct {
             self.system_protocol_dir = std.mem.trim(u8, self.step.owner.run(&.{ "pkg-config", "--variable=pkgdatadir", "wayland-protocols" }), &std.ascii.whitespace);
         }
         const path = self.step.owner.pathJoin(&.{ self.system_protocol_dir.?, xml });
-        self.addProtocol(.{
-            .cwd_relative = path,
-        });
+        self.addProtocol(.{ .cwd_relative = path });
     }
     pub fn addProtocol(self: *Self, xml: std.Build.LazyPath) void {
         const node = self.step.owner.allocator.create(QueueType.Node) catch @panic("OOM");
@@ -140,7 +143,7 @@ pub const WlScannerStep = struct {
         var it = self.queue.first;
         var manifest = step.owner.graph.cache.obtain();
         defer manifest.deinit();
-        manifest.hash.addBytes("wlscan003");
+        manifest.hash.addBytes("wlscan004");
         while (it) |node| : (it = node.next) {
             _ = try manifest.addFilePath(node.data.xml.getPath3(self.step.owner, step), null);
         }
