@@ -1,0 +1,11 @@
+.{
+    .name = .wlscanner_zbs_step,
+    .version = "0.0.0",
+    .fingerprint = 0x228c7651c2fd77b4,
+    .paths = .{
+        "README.md",
+        "LICENSE",
+        "build.zig",
+        "build.zig.zon",
+    },
+}
