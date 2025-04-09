@@ -4,6 +4,7 @@ pub const WlScannerStep = struct {
     const Protocol = struct {
         xml: std.Build.LazyPath,
         file: std.Build.GeneratedFile,
+        node: std.SinglyLinkedList.Node,
     };
     const WlScannerStepOptions = struct {
         optimize: std.builtin.OptimizeMode,
@@ -11,9 +12,8 @@ pub const WlScannerStep = struct {
         server_headers: bool = false,
         client_header_suffix: []const u8 = "-client-protocol.h",
     };
-    const QueueType = std.SinglyLinkedList(Protocol);
     step: std.Build.Step,
-    queue: QueueType,
+    queue: std.SinglyLinkedList,
     lib: *std.Build.Step.Compile,
     dest_path: std.Build.GeneratedFile,
     gen_server_headers: bool,
@@ -63,13 +63,14 @@ pub const WlScannerStep = struct {
         self.addProtocol(.{ .cwd_relative = path });
     }
     pub fn addProtocol(self: *Self, xml: std.Build.LazyPath) void {
-        const node = self.step.owner.allocator.create(QueueType.Node) catch @panic("OOM");
-        node.data = .{
+        const proto = self.step.owner.allocator.create(Protocol) catch @panic("OOM");
+        proto.* = .{
             .xml = xml,
             .file = .{ .step = &self.step },
+            .node = undefined,
         };
-        self.lib.addCSourceFile(.{ .file = .{ .generated = .{ .file = &node.data.file } }, .flags = &.{} });
-        self.queue.prepend(node);
+        self.queue.prepend(&proto.node);
+        self.lib.addCSourceFile(.{ .file = .{ .generated = .{ .file = &proto.file } }, .flags = &.{} });
     }
     pub fn addSystemProtocols(self: *Self, xmls: []const []const u8) void {
         for (xmls) |x| {
@@ -137,15 +138,13 @@ pub const WlScannerStep = struct {
     pub fn make(step: *std.Build.Step, options: std.Build.Step.MakeOptions) !void {
         _ = options;
         const self: *Self = @fieldParentPtr("step", step);
-        if (self.queue.first == null) {
-            return;
-        }
-        var it = self.queue.first;
+        var it:?*std.SinglyLinkedList.Node = self.queue.first orelse return;
         var manifest = step.owner.graph.cache.obtain();
         defer manifest.deinit();
-        manifest.hash.addBytes("wlscan004");
+        manifest.hash.addBytes("wlscan005");
         while (it) |node| : (it = node.next) {
-            _ = try manifest.addFilePath(node.data.xml.getPath3(self.step.owner, step), null);
+            const proto:*Protocol = @fieldParentPtr("node", node);
+            _ = try manifest.addFilePath(proto.xml.getPath3(self.step.owner, step), null);
         }
         self.step.result_cached = try manifest.hit();
         const dest = try step.owner.cache_root.join(step.owner.allocator, &.{ "wl-gen", &manifest.final() });
@@ -154,11 +153,12 @@ pub const WlScannerStep = struct {
         var dest_dir = try std.fs.cwd().makeOpenPath(dest, .{});
         defer dest_dir.close();
         while (it) |node| : (it = node.next) {
-            const path = node.data.xml.getPath3(self.step.owner, step);
+            const proto:*Protocol = @fieldParentPtr("node", node);
+            const path = proto.xml.getPath3(self.step.owner, step);
             // Need to fix the generatedfiles for the c sources
             const name = std.fs.path.stem(path.sub_path);
             const namefile = try std.mem.concat(step.owner.allocator, u8, &.{ name, ".c" });
-            node.data.file.path = step.owner.pathJoin(&.{ dest, namefile });
+            proto.file.path = step.owner.pathJoin(&.{ dest, namefile });
             if (!self.step.result_cached) {
                 self.process(path, dest) catch |err| {
                     std.log.err("failed to process protocol {s}", .{path.sub_path});
