@@ -11,6 +11,7 @@ pub const WlScannerStep = struct {
         target: std.Build.ResolvedTarget,
         server_headers: bool = false,
         client_header_suffix: []const u8 = "-client-protocol.h",
+        sub_directory: ?[]const u8 = null,
     };
     step: std.Build.Step,
     queue: std.SinglyLinkedList,
@@ -19,6 +20,7 @@ pub const WlScannerStep = struct {
     gen_server_headers: bool,
     client_header_suffix: []const u8,
     system_protocol_dir: ?[]const u8 = null,
+    sub_directory: ?[]const u8 = null,
     const Self = @This();
     pub fn create(b: *std.Build, options: WlScannerStepOptions) !*Self {
         const res = try b.allocator.create(Self);
@@ -47,6 +49,7 @@ pub const WlScannerStep = struct {
             .dest_path = .{ .step = &res.step },
             .gen_server_headers = options.server_headers,
             .client_header_suffix = options.client_header_suffix,
+            .sub_directory = options.sub_directory,
         };
         return res;
     }
@@ -138,22 +141,26 @@ pub const WlScannerStep = struct {
     pub fn make(step: *std.Build.Step, options: std.Build.Step.MakeOptions) !void {
         _ = options;
         const self: *Self = @fieldParentPtr("step", step);
-        var it:?*std.SinglyLinkedList.Node = self.queue.first orelse return;
+        var it: ?*std.SinglyLinkedList.Node = self.queue.first orelse return;
         var manifest = step.owner.graph.cache.obtain();
         defer manifest.deinit();
         manifest.hash.addBytes("wlscan005");
+        if (self.sub_directory) |subdir| {
+            manifest.hash.addBytes(subdir);
+        }
         while (it) |node| : (it = node.next) {
-            const proto:*Protocol = @fieldParentPtr("node", node);
+            const proto: *Protocol = @fieldParentPtr("node", node);
             _ = try manifest.addFilePath(proto.xml.getPath3(self.step.owner, step), null);
         }
         self.step.result_cached = try manifest.hit();
-        const dest = try step.owner.cache_root.join(step.owner.allocator, &.{ "wl-gen", &manifest.final() });
-        self.dest_path.path = dest;
+        const cache_dest = try step.owner.cache_root.join(step.owner.allocator, &.{ "wl-gen", &manifest.final() });
+        const dest = if (self.sub_directory) |subdir| step.owner.pathJoin(&.{ cache_dest, subdir }) else cache_dest;
+        self.dest_path.path = cache_dest;
         it = self.queue.first;
         var dest_dir = try std.fs.cwd().makeOpenPath(dest, .{});
         defer dest_dir.close();
         while (it) |node| : (it = node.next) {
-            const proto:*Protocol = @fieldParentPtr("node", node);
+            const proto: *Protocol = @fieldParentPtr("node", node);
             const path = proto.xml.getPath3(self.step.owner, step);
             // Need to fix the generatedfiles for the c sources
             const name = std.fs.path.stem(path.sub_path);
