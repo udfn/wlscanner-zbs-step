@@ -73,7 +73,7 @@ pub const WlScannerStep = struct {
             .node = undefined,
         };
         self.queue.prepend(&proto.node);
-        self.lib.addCSourceFile(.{ .file = .{ .generated = .{ .file = &proto.file } }, .flags = &.{} });
+        self.lib.root_module.addCSourceFile(.{ .file = .{ .generated = .{ .file = &proto.file } }, .flags = &.{} });
     }
     pub fn addSystemProtocols(self: *Self, xmls: []const []const u8) void {
         for (xmls) |x| {
@@ -102,7 +102,7 @@ pub const WlScannerStep = struct {
     fn runScanner(self: *Self, protocol: std.Build.Cache.Path, gentype: WlScanGenType, output: []const u8) !void {
         var scannerprocess = std.process.Child.init(&.{ "wayland-scanner", gentype.toString(), protocol.sub_path, output }, self.step.owner.allocator);
         scannerprocess.cwd_dir = protocol.root_dir.handle;
-        const ret = try scannerprocess.spawnAndWait();
+        const ret = try scannerprocess.spawnAndWait(self.step.owner.graph.io);
         switch (ret) {
             .Exited => |val| {
                 if (val == 0) {
@@ -157,8 +157,8 @@ pub const WlScannerStep = struct {
         const dest = if (self.sub_directory) |subdir| step.owner.pathJoin(&.{ cache_dest, subdir }) else cache_dest;
         self.dest_path.path = cache_dest;
         it = self.queue.first;
-        var dest_dir = try std.fs.cwd().makeOpenPath(dest, .{});
-        defer dest_dir.close();
+        var dest_dir = try std.Io.Dir.cwd().createDirPathOpen(step.owner.graph.io, dest, .{});
+        defer dest_dir.close(step.owner.graph.io);
         while (it) |node| : (it = node.next) {
             const proto: *Protocol = @fieldParentPtr("node", node);
             const path = proto.xml.getPath3(self.step.owner, step);
