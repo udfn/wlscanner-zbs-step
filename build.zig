@@ -102,7 +102,7 @@ pub const WlScannerStep = struct {
     fn runScanner(self: *Self, protocol: std.Build.Cache.Path, gentype: WlScanGenType, output: []const u8) !void {
         var scannerprocess = try std.process.spawn(self.step.owner.graph.io, .{
             .argv = &.{ "wayland-scanner", gentype.toString(), protocol.sub_path, output },
-            .cwd_dir = protocol.root_dir.handle,
+            .cwd = .{ .dir = protocol.root_dir.handle },
         });
         const ret = try scannerprocess.wait(self.step.owner.graph.io);
         switch (ret) {
