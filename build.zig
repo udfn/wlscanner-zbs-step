@@ -1,88 +1,63 @@
 const std = @import("std");
 
 pub const WlScannerStep = struct {
-    const Protocol = struct {
-        xml: std.Build.LazyPath,
-        file: std.Build.GeneratedFile,
-        node: std.SinglyLinkedList.Node,
-    };
     const WlScannerStepOptions = struct {
         optimize: std.builtin.OptimizeMode,
         target: std.Build.ResolvedTarget,
         server_headers: bool = false,
         client_header_suffix: []const u8 = "-client-protocol.h",
-        sub_directory: ?[]const u8 = null,
     };
-    step: std.Build.Step,
-    queue: std.SinglyLinkedList,
     lib: *std.Build.Step.Compile,
-    dest_path: std.Build.GeneratedFile,
     gen_server_headers: bool,
     client_header_suffix: []const u8,
     system_protocol_dir: ?[]const u8 = null,
-    sub_directory: ?[]const u8 = null,
-    const Self = @This();
-    pub fn create(b: *std.Build, options: WlScannerStepOptions) !*Self {
-        const res = try b.allocator.create(Self);
-        const mod = b.createModule(.{
-            .target = options.target,
-            .optimize = options.optimize,
-            .link_libc = true,
-        });
-        // Why not just linkSystemLibrary? Because if I do that then I get lld warnings like...
-        // archive member '/lib64/libwayland-client.so' is neither ET_REL nor LLVM bitcode
-        // ... that make the build system think the build failed, but it did not really fail.
-        mod.addIncludePath(.{ .cwd_relative = std.mem.trim(u8, b.run(&.{ "pkg-config", "--variable=includedir", "wayland-client" }), &std.ascii.whitespace) });
+    wayland_scanner_exe: std.Build.LazyPath,
+    pub fn create(b: *std.Build, options: WlScannerStepOptions) *WlScannerStep {
+        const res = b.allocator.create(WlScannerStep) catch @panic("OOM");
         res.* = .{
-            .step = std.Build.Step.init(.{
-                .id = .custom,
-                .name = "wayland-scanner",
-                .owner = b,
-                .makeFn = make,
-            }),
-            .queue = .{},
             .lib = b.addLibrary(.{
                 .linkage = .static,
                 .name = "wl-protocol-lib",
-                .root_module = mod,
+                .root_module = b.createModule(.{
+                    .target = options.target,
+                    .optimize = options.optimize,
+                    .link_libc = true,
+                }),
             }),
-            .dest_path = .{ .step = &res.step },
             .gen_server_headers = options.server_headers,
             .client_header_suffix = options.client_header_suffix,
-            .sub_directory = options.sub_directory,
+            .wayland_scanner_exe = b.findProgramLazy(.{ .names = &.{"wayland-scanner"} }),
         };
+        // Why not just linkSystemLibrary? Because if I do that then I get lld warnings like...
+        // archive member '/lib64/libwayland-client.so' is neither ET_REL nor LLVM bitcode
+        // ... that make the build system think the build failed, but it did not really fail.
+        res.lib.root_module.addIncludePath(.{ .cwd_relative = std.mem.trim(u8, b.run(&.{ "pkg-config", "--variable=includedir", "wayland-client" }), &std.ascii.whitespace) });
         return res;
     }
-    pub fn linkWith(self: *Self, mod: *std.Build.Module) void {
+
+    pub fn linkWith(self: *WlScannerStep, mod: *std.Build.Module) void {
         mod.linkLibrary(self.lib);
-        mod.addIncludePath(.{ .generated = .{ .file = &self.dest_path } });
     }
 
-    pub fn addSystemProtocol(self: *Self, xml: []const u8) void {
+    pub fn addSystemProtocol(self: *WlScannerStep, xml: []const u8) void {
         if (self.system_protocol_dir == null) {
-            self.system_protocol_dir = std.mem.trim(u8, self.step.owner.run(&.{ "pkg-config", "--variable=pkgdatadir", "wayland-protocols" }), &std.ascii.whitespace);
+            self.system_protocol_dir = std.mem.trim(u8, self.lib.step.owner.run(&.{ "pkg-config", "--variable=pkgdatadir", "wayland-protocols" }), &std.ascii.whitespace);
         }
-        const path = self.step.owner.pathJoin(&.{ self.system_protocol_dir.?, xml });
-        self.addProtocol(.{ .cwd_relative = path });
+        const path = self.lib.step.owner.pathJoin(&.{ self.system_protocol_dir.?, xml });
+        self.addProtocol(.{ .cwd_relative = path }, std.fs.path.stem(xml));
     }
-    pub fn addProtocol(self: *Self, xml: std.Build.LazyPath) void {
-        const proto = self.step.owner.allocator.create(Protocol) catch @panic("OOM");
-        proto.* = .{
-            .xml = xml,
-            .file = .{ .step = &self.step },
-            .node = undefined,
-        };
-        self.queue.prepend(&proto.node);
-        self.lib.root_module.addCSourceFile(.{ .file = .{ .generated = .{ .file = &proto.file } }, .flags = &.{} });
+
+    pub fn addProtocol(self: *WlScannerStep, xml: std.Build.LazyPath, name: []const u8) void {
+        self.runScanner(xml, .code, name);
+        if (self.gen_server_headers) {
+            self.runScanner(xml, .serverheader, name);
+        }
+        self.runScanner(xml, .clientheader, name);
     }
-    pub fn addSystemProtocols(self: *Self, xmls: []const []const u8) void {
+
+    pub fn addSystemProtocols(self: *WlScannerStep, xmls: []const []const u8) void {
         for (xmls) |x| {
             self.addSystemProtocol(x);
-        }
-    }
-    pub fn addProtocols(self: *Self, xmls: []const std.Build.LazyPath) void {
-        for (xmls) |x| {
-            self.addProtocol(x);
         }
     }
 
@@ -99,84 +74,22 @@ pub const WlScannerStep = struct {
         }
     };
 
-    fn runScanner(self: *Self, protocol: std.Build.Cache.Path, gentype: WlScanGenType, output: []const u8) !void {
-        var scannerprocess = try std.process.spawn(self.step.owner.graph.io, .{
-            .argv = &.{ "wayland-scanner", gentype.toString(), protocol.sub_path, output },
-            .cwd = .{ .dir = protocol.root_dir.handle },
-        });
-        const ret = try scannerprocess.wait(self.step.owner.graph.io);
-        switch (ret) {
-            .exited => |val| {
-                if (val == 0) {
-                    return;
-                }
-            },
-            else => {},
-        }
-        return error.WaylandScannerFailed;
-    }
-
-    fn processProtocol(self: *Self, ally: std.mem.Allocator, protocol: std.Build.Cache.Path, gentype: WlScanGenType, dest: []const u8) !void {
-        const protoname = std.fs.path.stem(protocol.sub_path);
-        const filesuffix = switch (gentype) {
-            .code => ".c",
-            .clientheader => self.client_header_suffix,
-            .serverheader => "-protocol.h",
+    fn runScanner(self: *WlScannerStep, protocol: std.Build.LazyPath, gentype: WlScanGenType, protocol_name: []const u8) void {
+        const run = self.lib.step.owner.addRunFile(self.wayland_scanner_exe);
+        run.addArg(gentype.toString());
+        run.addFileArg(protocol);
+        var fba_buf: [1024]u8 = undefined;
+        var fba: std.heap.FixedBufferAllocator = .init(&fba_buf);
+        const output_name = switch (gentype) {
+            .code => std.mem.concat(fba.allocator(), u8, &.{ protocol_name, ".c" }) catch @panic("OOM"),
+            .clientheader => std.mem.concat(fba.allocator(), u8, &.{ protocol_name, self.client_header_suffix }) catch @panic("OOM"),
+            .serverheader => std.mem.concat(fba.allocator(), u8, &.{ protocol_name, "-protocol.h" }) catch @panic("OOM"),
         };
-        const filename = try std.mem.concat(ally, u8, &.{ protoname, filesuffix });
-        try self.runScanner(protocol, gentype, self.step.owner.pathJoin(&.{ dest, filename }));
-    }
-
-    pub fn process(self: *Self, protocol: std.Build.Cache.Path, dest: []const u8) !void {
-        var buf: [2048]u8 = undefined;
-        var fba = std.heap.FixedBufferAllocator.init(buf[0..]);
-        const ally = fba.allocator();
-        try self.processProtocol(ally, protocol, .code, dest);
-        fba.reset();
-        try self.processProtocol(ally, protocol, .clientheader, dest);
-        if (self.gen_server_headers) {
-            fba.reset();
-            try self.processProtocol(ally, protocol, .serverheader, dest);
-        }
-    }
-
-    pub fn make(step: *std.Build.Step, options: std.Build.Step.MakeOptions) !void {
-        _ = options;
-        const self: *Self = @fieldParentPtr("step", step);
-        var it: ?*std.SinglyLinkedList.Node = self.queue.first orelse return;
-        var manifest = step.owner.graph.cache.obtain();
-        defer manifest.deinit();
-        manifest.hash.addBytes("wlscan005");
-        if (self.sub_directory) |subdir| {
-            manifest.hash.addBytes(subdir);
-        }
-        while (it) |node| : (it = node.next) {
-            const proto: *Protocol = @fieldParentPtr("node", node);
-            _ = try manifest.addFilePath(proto.xml.getPath3(self.step.owner, step), null);
-        }
-        self.step.result_cached = try manifest.hit();
-        const cache_dest = try step.owner.cache_root.join(step.owner.allocator, &.{ "wl-gen", &manifest.final() });
-        const dest = if (self.sub_directory) |subdir| step.owner.pathJoin(&.{ cache_dest, subdir }) else cache_dest;
-        self.dest_path.path = cache_dest;
-        it = self.queue.first;
-        var dest_dir = try std.Io.Dir.cwd().createDirPathOpen(step.owner.graph.io, dest, .{});
-        defer dest_dir.close(step.owner.graph.io);
-        while (it) |node| : (it = node.next) {
-            const proto: *Protocol = @fieldParentPtr("node", node);
-            const path = proto.xml.getPath3(self.step.owner, step);
-            // Need to fix the generatedfiles for the c sources
-            const name = std.fs.path.stem(path.sub_path);
-            const namefile = try std.mem.concat(step.owner.allocator, u8, &.{ name, ".c" });
-            proto.file.path = step.owner.pathJoin(&.{ dest, namefile });
-            if (!self.step.result_cached) {
-                self.process(path, dest) catch |err| {
-                    std.log.err("failed to process protocol {s}", .{path.sub_path});
-                    return err;
-                };
-            }
-        }
-        if (!self.step.result_cached) {
-            try manifest.writeManifest();
+        const output_file = run.addOutputFileArg(output_name);
+        if (gentype == .code) {
+            self.lib.root_module.addCSourceFile(.{ .file = output_file, .flags = &.{} });
+        } else {
+            self.lib.installHeader(output_file, output_name);
         }
     }
 };
