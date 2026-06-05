@@ -6,11 +6,13 @@ pub const WlScannerStep = struct {
         target: std.Build.ResolvedTarget,
         server_headers: bool = false,
         client_header_suffix: []const u8 = "-client-protocol.h",
+        sub_directory: ?[]const u8 = null,
     };
     lib: *std.Build.Step.Compile,
     gen_server_headers: bool,
     client_header_suffix: []const u8,
     system_protocol_dir: ?[]const u8 = null,
+    sub_directory: ?[]const u8,
     wayland_scanner_exe: std.Build.LazyPath,
     pub fn create(b: *std.Build, options: WlScannerStepOptions) *WlScannerStep {
         const res = b.allocator.create(WlScannerStep) catch @panic("OOM");
@@ -27,6 +29,7 @@ pub const WlScannerStep = struct {
             .gen_server_headers = options.server_headers,
             .client_header_suffix = options.client_header_suffix,
             .wayland_scanner_exe = b.findProgramLazy(.{ .names = &.{"wayland-scanner"} }),
+            .sub_directory = options.sub_directory,
         };
         // Why not just linkSystemLibrary? Because if I do that then I get lld warnings like...
         // archive member '/lib64/libwayland-client.so' is neither ET_REL nor LLVM bitcode
@@ -61,6 +64,12 @@ pub const WlScannerStep = struct {
         }
     }
 
+    pub fn addLocalProtocols(self: *WlScannerStep, b: *std.Build, paths: []const []const u8) void {
+        for (paths) |path| {
+            self.addProtocol(b.path(path), std.fs.path.stem(path));
+        }
+    }
+
     const WlScanGenType = enum {
         code,
         clientheader,
@@ -80,11 +89,14 @@ pub const WlScannerStep = struct {
         run.addFileArg(protocol);
         var fba_buf: [1024]u8 = undefined;
         var fba: std.heap.FixedBufferAllocator = .init(&fba_buf);
-        const output_name = switch (gentype) {
+        var output_name = switch (gentype) {
             .code => std.mem.concat(fba.allocator(), u8, &.{ protocol_name, ".c" }) catch @panic("OOM"),
             .clientheader => std.mem.concat(fba.allocator(), u8, &.{ protocol_name, self.client_header_suffix }) catch @panic("OOM"),
             .serverheader => std.mem.concat(fba.allocator(), u8, &.{ protocol_name, "-protocol.h" }) catch @panic("OOM"),
         };
+        if (self.sub_directory) |subdir| {
+            output_name = self.lib.step.owner.pathJoin(&.{ subdir, output_name });
+        }
         const output_file = run.addOutputFileArg(output_name);
         if (gentype == .code) {
             self.lib.root_module.addCSourceFile(.{ .file = output_file, .flags = &.{} });
